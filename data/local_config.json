@@ -1,0 +1,25 @@
+{
+  "active_provider": "deepseek",
+  "llm_debug": false,
+  "providers": {
+    "deepseek": {
+      "llm_provider": "openai_compatible",
+      "llm_api_key": "",
+      "llm_base_url": "https://api.deepseek.com/chat/completions",
+      "llm_model": "deepseek-v4-flash"
+    },
+    "company": {
+      "llm_provider": "generic_json",
+      "llm_api_key": "",
+      "llm_base_url": "https://your-company-endpoint",
+      "llm_headers": {
+        "Cookie": "...",
+        "Authorization": "Bearer ..."
+      },
+      "llm_body_template": {
+        "input": "{messages_text}"
+      },
+      "llm_response_path": "reply.text"
+    }
+  }
+}
