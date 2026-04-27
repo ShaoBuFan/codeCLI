@@ -23,7 +23,7 @@ def _finish(payload, content):
 
 
 def _call_model(client, messages, settings):
-    """Single call with retry. Returns (raw, parsed) or (raw, fallback)."""
+    """Single call with retry. Returns (raw, parsed, exhausted_flag)."""
     attempts = settings["model_retry_limit"] + 1
     retry_messages = list(messages)
 
@@ -31,7 +31,7 @@ def _call_model(client, messages, settings):
         raw = client.chat(retry_messages)
         parsed, error = protocol.parse_model_output(raw)
         if parsed is not None:
-            return raw, parsed
+            return raw, parsed, False
 
         protocol.log_malformed_output(
             settings["logs_dir"],
@@ -44,7 +44,7 @@ def _call_model(client, messages, settings):
         retry_messages.append({"role": "assistant", "content": protocol.strip_code_fence(raw)})
         retry_messages.append({"role": "system", "content": prompts.build_retry_prompt(attempt + 1, error)})
 
-    return raw, {"type": "final", "content": raw}
+    return raw, {"type": "final", "content": raw}, True
 
 
 _TOOL_DESCRIPTIONS = [
@@ -70,6 +70,20 @@ def _build_tool_prompt(allowed):
     lines.append("")
     lines.append("Use only one tool per response.")
     return "\n".join(lines)
+
+
+def _try_advance_phase(state_obj, payload):
+    """Check and apply phase transition.  Returns True if phase changed."""
+    next_phase = ph.get_next_phase(state_obj)
+    if next_phase == state_obj.phase:
+        return False
+    old = state_obj.phase
+    state_obj.phase = next_phase
+    new_tools = ph.PHASE_TOOLS.get(next_phase, [])
+    session_module.append_message(payload, "system",
+        "Phase: %s → %s. New tools: %s" % (
+            old.value, next_phase.value, ", ".join(new_tools) or "none"))
+    return True
 
 
 def _apply_report(result, state_obj, payload):
@@ -168,9 +182,28 @@ def run(client, settings, payload, user_input):
             )
         )
 
-        raw_output, parsed = _call_model(client, messages, settings)
+        raw_output, parsed, retries_exhausted = _call_model(client, messages, settings)
 
         if parsed.get("type") == "final":
+            # Let retry-exhausted fallback through — model can't produce valid output
+            if retries_exhausted:
+                sm.save(state_obj)
+                return _finish(payload, protocol.extract_final_content(parsed))
+            # Block final answers in work phases — push model to use phase tools
+            if state_obj.phase in (st.Phase.EXPLORING, st.Phase.PLANNING, st.Phase.PATCHING):
+                session_module.append_message(payload, "assistant", raw_output)
+                hints = {
+                    st.Phase.EXPLORING: "Call report_findings to record what you learned.",
+                    st.Phase.PLANNING: "Call report_plan with your step list to advance.",
+                    st.Phase.PATCHING: "Call write_file to create the files — code in a final answer is not saved to disk.",
+                }
+                hint = hints.get(state_obj.phase, "Use the available tools to complete the current step.")
+                hint = "You cannot give a final answer yet (phase: %s). %s" % (state_obj.phase.value, hint)
+                session_module.append_message(payload, "system", hint)
+                session_module.save_session(payload)
+                state_obj.iteration_count += 1
+                sm.save(state_obj)
+                continue
             sm.save(state_obj)
             return _finish(payload, protocol.extract_final_content(parsed))
 
@@ -214,17 +247,12 @@ def run(client, settings, payload, user_input):
                     state_obj.facts.files_modified.append(arguments.get("path", ""))
                 if state_obj.current_step_index < len(state_obj.steps) - 1:
                     state_obj.current_step_index += 1
+                # Check if all steps are now done → advance to VERIFYING
+                _try_advance_phase(state_obj, payload)
 
             if result.get("_report"):
                 _apply_report(result, state_obj, payload)
-
-                # Check phase transition
-                next_phase = ph.get_next_phase(state_obj)
-                if next_phase != state_obj.phase:
-                    old = state_obj.phase
-                    state_obj.phase = next_phase
-                    session_module.append_message(payload, "system",
-                        "Phase: %s → %s" % (old.value, next_phase.value))
+                _try_advance_phase(state_obj, payload)
 
             session_module.append_tool_call(payload, tool_name, arguments, result)
             session_module.append_message(payload, "assistant", raw_output)

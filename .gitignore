@@ -219,3 +219,5 @@ __marimo__/
 
 # codeCLI runtime state
 data/agent_state/
+data/sessions/
+data/logs/
