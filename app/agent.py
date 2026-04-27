@@ -14,6 +14,20 @@ import session as session_module
 import tools
 
 
+def _inject_project_once(payload):
+    """Inject PROJECT.md as a system message once per session."""
+    workdir = payload.get("workdir", "")
+    ctx = msg.load_project_context(workdir)
+    if not ctx:
+        return
+    # Don't inject if already present in this session
+    marker = "## Project context (PROJECT.md)"
+    for m in payload["messages"]:
+        if isinstance(m.get("content"), str) and marker in m["content"]:
+            return
+    session_module.append_message(payload, ctx["role"], ctx["content"])
+
+
 def _finish(session_payload, content):
     """Persist assistant response and return it."""
     session_module.append_message(session_payload, "assistant", content)
@@ -61,6 +75,9 @@ def handle_user_message(client, settings, session_payload, user_input):
     model is making productive progress, up to max_steps hard cap.
     """
     session_module.append_message(session_payload, "user", user_input)
+
+    _inject_project_once(session_payload)
+
     seen_calls = set()
 
     min_steps = settings.get("min_steps", 10)
@@ -96,8 +113,8 @@ def handle_user_message(client, settings, session_payload, user_input):
                 return _finish(session_payload, "Stopped because the model repeated the same tool call without making progress.")
 
             seen_calls.add(call_key)
-            if settings.get("show_tool_calls"):
-                print("  [%s] %s(%s)" % (step + 1, tool_name, json.dumps(arguments, ensure_ascii=False)), flush=True)
+            args_str = ", ".join("%s=%s" % (k, json.dumps(v, ensure_ascii=False)) for k, v in arguments.items())
+            print("  \033[90m#%d %s(%s)\033[0m" % (step + 1, tool_name, args_str), flush=True)
             result = tools.run_tool(tool_name, arguments, settings)
 
             if result.get("ok"):

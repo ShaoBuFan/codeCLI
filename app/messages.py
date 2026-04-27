@@ -1,10 +1,26 @@
 """Message history management and assembly for the agent loop.
 
 Responsible for building the message list sent to the LLM,
-including history trimming and role normalization.
+including history trimming, role normalization, and project context injection.
 """
 
+from pathlib import Path
+
 import prompts
+
+
+def load_project_context(workdir):
+    """Read PROJECT.md if it exists, returning it as a system message or None."""
+    if not workdir:
+        return None
+    path = Path(workdir) / "PROJECT.md"
+    try:
+        content = path.read_text("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not content.strip():
+        return None
+    return {"role": "system", "content": "## Project context (PROJECT.md)\n\n%s" % content}
 
 
 def trim_history(messages, max_history_messages):

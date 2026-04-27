@@ -3,10 +3,6 @@ import os
 from pathlib import Path
 
 
-DEFAULT_BASE_URL = "https://api.deepseek.com/chat/completions"
-DEFAULT_MODEL = "deepseek-v4-flash"
-DEFAULT_TIMEOUT = 120
-DEFAULT_PROVIDER = "openai_compatible"
 
 
 def project_root():
@@ -64,8 +60,7 @@ def save_local_config(data):
 
 def config_template():
     return {
-        "active_provider": "company",
-        "git_bash_path": detect_git_bash(),
+        "active_provider": "deepseek",
         "llm_debug": False,
         "providers": {
             "deepseek": {
@@ -74,19 +69,14 @@ def config_template():
                 "llm_base_url": "https://api.deepseek.com/chat/completions",
                 "llm_model": "deepseek-v4-flash"
             },
-            "company": {
-                "llm_provider": "generic_json",
-                "llm_api_key": "",
-                "llm_base_url": "https://your-company-endpoint",
-                "llm_model": "",
-                "llm_headers": {
-                    "Cookie": "...",
-                    "Authorization": "Bearer ..."
-                },
-                "llm_body_template": {
-                    "input": "{messages_text}"
-                },
-                "llm_response_path": "reply.text"
+            "mattermost": {
+                "llm_provider": "mattermost",
+                "llm_base_url": "https://mattermost.aslead.cloud/plugins/aslead-chatgpt",
+                "llm_model_key": "sendMessageToChatGPT",
+                "access_team": "",
+                "mmauth_token": "",
+                "mmuser_id": "",
+                "csrf_token": ""
             }
         },
     }
@@ -126,56 +116,49 @@ def _pick_setting(local_config, provider_config, key, env_name, default=None):
 
 
 def get_timeout():
-    raw = get_env("LLM_TIMEOUT", str(DEFAULT_TIMEOUT))
+    raw = get_env("LLM_TIMEOUT", "120")
     try:
         return int(raw)
     except (TypeError, ValueError):
-        return DEFAULT_TIMEOUT
+        return 120
 
 
-def detect_git_bash():
-    candidates = [
-        get_env("GIT_BASH_PATH"),
-        r"C:\Program Files\Git\bin\bash.exe",
-        r"C:\Program Files\Git\usr\bin\bash.exe",
-        r"C:\Program Files\Git\git-bash.exe",
-        r"C:\Program Files (x86)\Git\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
-    ]
-    for item in candidates:
-        if item and Path(item).exists():
-            return item
-    # Fallback to cmd.exe on Windows when Git Bash is not available
-    cmd = get_env("COMSPEC", "cmd.exe")
-    return cmd if Path(cmd).exists() else "cmd.exe"
+_RESOLVED = [
+    # (key, env_name, default)  — default may be a callable for lazy evaluation
+    ("llm_provider",   "LLM_PROVIDER",   ""),
+    ("llm_api_key",    "LLM_API_KEY",    ""),
+    ("llm_base_url",   "LLM_BASE_URL",   ""),
+    ("llm_model",      "LLM_MODEL",      ""),
+    ("llm_timeout",    "",               get_timeout),
+    ("llm_headers",    "",               None),
+    ("llm_model_key",  "",               ""),
+    ("access_team",    "",               ""),
+    ("mmauth_token",   "",               ""),
+    ("mmuser_id",      "",               ""),
+    ("csrf_token",     "",               ""),
+]
 
 
 def load_settings():
     ensure_directories()
-    local_config = load_local_config()
-    provider_config = _active_provider_config(local_config)
-    return {
-        "project_root": str(project_root()),
-        "logs_dir": str(logs_dir()),
-        "active_provider": _active_provider_name(local_config),
-        "llm_provider": _pick_setting(local_config, provider_config, "llm_provider", "LLM_PROVIDER", DEFAULT_PROVIDER),
-        "llm_api_key": _pick_setting(local_config, provider_config, "llm_api_key", "LLM_API_KEY", ""),
-        "llm_base_url": _pick_setting(local_config, provider_config, "llm_base_url", "LLM_BASE_URL", DEFAULT_BASE_URL),
-        "llm_model": _pick_setting(local_config, provider_config, "llm_model", "LLM_MODEL", DEFAULT_MODEL),
-        "llm_timeout": _pick_setting(local_config, provider_config, "llm_timeout", "", get_timeout()),
-        "llm_headers": _pick_setting(local_config, provider_config, "llm_headers", "", None),
-        "llm_headers_json": _pick_setting(local_config, provider_config, "llm_headers_json", "LLM_HEADERS_JSON", ""),
-        "llm_body_template": _pick_setting(local_config, provider_config, "llm_body_template", "", None),
-        "llm_body_template_json": _pick_setting(local_config, provider_config, "llm_body_template_json", "LLM_BODY_TEMPLATE_JSON", ""),
-        "llm_response_path": _pick_setting(local_config, provider_config, "llm_response_path", "LLM_RESPONSE_PATH", "content"),
-        "git_bash_path": local_config.get("git_bash_path") or detect_git_bash(),
-        "min_steps": 10,
-        "max_steps": 25,
-        "extension_step": 5,
-        "max_history_messages": 16,
-        "max_file_bytes": 200000,
-        "max_shell_output_chars": 12000,
-        "model_retry_limit": 2,
-        "llm_debug": bool(local_config.get("llm_debug")) or get_env("LLM_DEBUG", "").lower() in ("1", "true", "yes", "on"),
-        "show_tool_calls": False,
+    lc = load_local_config()
+    pc = _active_provider_config(lc)
+
+    settings = {
+        "project_root":          str(project_root()),
+        "logs_dir":              str(logs_dir()),
+        "active_provider":       _active_provider_name(lc),
+        "llm_debug":             bool(lc.get("llm_debug")) or get_env("LLM_DEBUG", "").lower() in ("1", "true", "yes", "on"),
+        "min_steps":             10,
+        "max_steps":             25,
+        "extension_step":        5,
+        "max_history_messages":  16,
+        "max_file_bytes":        200000,
+        "model_retry_limit":     2,
     }
+
+    for key, env, default in _RESOLVED:
+        d = default() if callable(default) else default
+        settings[key] = _pick_setting(lc, pc, key, env, d)
+
+    return settings

@@ -71,7 +71,7 @@ def list_sessions():
                     "workdir": payload.get("workdir", ""),
                 }
             )
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             items.append({"session_id": path.stem, "updated_at": 0, "workdir": ""})
     items.sort(key=lambda item: item["updated_at"], reverse=True)
     return items

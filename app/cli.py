@@ -4,13 +4,16 @@ Each run_* function corresponds to a subcommand from main.py's argument parser.
 Contains slash-command handling, display formatting, and provider management.
 """
 
+import datetime
 import json
 import os
 
 import agent
 import config
 import files
+import init
 import llm_client
+import orchestrator
 import session
 
 
@@ -50,35 +53,24 @@ def _print_json_like(result):
 
 
 def _show_help():
-    print("Available commands:")
-    print("/help")
-    print("/cwd")
-    print("/provider")
-    print("/provider <name>")
-    print("/session")
-    print("/sessions")
-    print("/load <session_id>")
-    print("/files [path]")
-    print("/read <path>")
-    print("/search <keyword> [path]")
-    print("/config")
-    print("/clear")
-    print("/verbose")
-    print("/exit")
+    print("Info              Session              Tools")
+    print("  /help             /session             /files [path]")
+    print("  /config           /sessions            /read <path>")
+    print("  /cwd              /load <id>           /search <kw> [path]")
+    print("  /provider [name]  /clear")
+    print("  /init             /exit")
 
 
 def _show_config(settings):
-    print("active_provider:", settings["active_provider"])
-    print("project_root:", settings["project_root"])
-    print("workdir:", settings["workdir"])
-    print("llm_provider:", settings["llm_provider"])
-    print("llm_base_url:", settings["llm_base_url"])
-    print("llm_model:", settings["llm_model"])
-    print("llm_timeout:", settings["llm_timeout"])
-    print("llm_response_path:", settings["llm_response_path"])
-    print("llm_debug:", "on" if settings["llm_debug"] else "off")
-    print("git_bash_path:", settings["git_bash_path"])
-    print("api_key_configured:", "yes" if settings["llm_api_key"] else "no")
+    key = "configured" if settings["llm_api_key"] else "not set"
+    debug = "on" if settings["llm_debug"] else "off"
+    print("provider:   %s (%s)" % (settings["active_provider"], settings["llm_provider"]))
+    print("model:      %s" % settings.get("llm_model") or settings.get("llm_model_key", ""))
+    print("base_url:   %s" % settings["llm_base_url"])
+    print("timeout:    %ss" % settings["llm_timeout"])
+    print("debug:      %s" % debug)
+    print("api_key:    %s" % key)
+    print("workdir:    %s" % settings["workdir"])
 
 
 def _list_provider_names():
@@ -89,14 +81,12 @@ def _list_provider_names():
 def _show_provider_status():
     settings = config.load_settings()
     names = _list_provider_names()
-    print("active_provider:", settings["active_provider"])
     if not names:
-        print("providers: none")
+        print("no providers configured")
         return
-    print("providers:")
     for name in names:
-        marker = "* " if name == settings["active_provider"] else "  "
-        print("%s%s" % (marker, name))
+        marker = "*" if name == settings["active_provider"] else " "
+        print(" %s  %s" % (marker, name))
 
 
 def _switch_provider(name):
@@ -111,10 +101,6 @@ def _switch_provider(name):
     local_config["active_provider"] = name
     config.save_local_config(local_config)
     print("active_provider:", name)
-
-
-def _show_current_workdir(payload):
-    print(payload["workdir"])
 
 
 def _is_tool_call_json(content):
@@ -144,113 +130,144 @@ def _display_session_history(messages):
             break
 
     if last_user is not None or last_assistant is not None:
-        print("--- last exchange ---")
+        print("\033[90m┄┄┄ last exchange ┄┄┄\033[0m")
         if last_user:
-            print("  user:", last_user[:200])
+            print(" \033[1mYou\033[0m  %s" % last_user[:200])
         if last_assistant:
-            print("  assistant:", last_assistant[:200])
+            print(" \033[1mAI\033[0m   %s" % last_assistant[:200])
+            print()
+
+
 
 
 # ---------------------------------------------------------------------------
 # Slash commands
 # ---------------------------------------------------------------------------
 
-def _run_slash_command(user_input, settings, payload):
+# Each handler receives (settings, payload, client, args_list).
+# Returns (handled, should_exit, rebuild_client).
+
+def _cmd_help(_, _1, _2, _3):
+    _show_help()
+    return True, False, False
+
+def _cmd_cwd(_, p, _1, _2):
+    print(p["workdir"])
+    return True, False, False
+
+def _cmd_session(_, p, _1, _2):
+    print(p["session_id"])
+    return True, False, False
+
+def _cmd_sessions(_, _1, _2, _3):
+    items = session.list_sessions()
+    if not items:
+        print("no sessions")
+        return True, False, False
+    for item in items:
+        ts = datetime.datetime.fromtimestamp(item["updated_at"]).strftime("%m-%d %H:%M")
+        print("  %s  %s  %s" % (ts, item["session_id"], item["workdir"]))
+    return True, False, False
+
+def _cmd_provider(s, _1, _2, args):
+    if not args:
+        _show_provider_status()
+        return True, False, False
+    _switch_provider(args[0])
+    workdir = s.get("workdir")
+    new_settings = config.load_settings()
+    s.clear()
+    s.update(new_settings)
+    s["workdir"] = workdir
+    return True, False, True
+
+def _cmd_load(s, p, _1, args):
+    if not args:
+        print("usage: /load <session_id>")
+        return True, False, False
+    try:
+        new_payload = session.load_session(args[0])
+    except RuntimeError as exc:
+        print("error:", exc)
+        return True, False, False
+    p.clear()
+    p.update(new_payload)
+    s["workdir"] = p["workdir"]
+    print("loaded  %s" % p["session_id"])
+    print("workdir %s" % p["workdir"])
+    _display_session_history(p["messages"])
+    return True, False, False
+
+def _cmd_files(s, p, _1, args):
+    path = args[0] if args else "."
+    result = files.list_files(root=p["workdir"], relative_path=path, recursive=True)
+    _print_json_like(result)
+    return True, False, False
+
+def _cmd_read(s, p, _1, args):
+    if not args:
+        print("usage: /read <path>")
+        return True, False, False
+    result = files.read_file(root=p["workdir"], relative_path=args[0],
+                             max_bytes=s["max_file_bytes"])
+    _print_json_like(result)
+    return True, False, False
+
+def _cmd_search(s, p, _1, args):
+    if not args:
+        print("usage: /search <keyword> [path]")
+        return True, False, False
+    keyword = args[0]
+    path = args[1] if len(args) >= 2 else "."
+    result = files.search_text(root=p["workdir"], keyword=keyword, relative_path=path)
+    _print_json_like(result)
+    return True, False, False
+
+def _cmd_config(s, _1, _2, _3):
+    _show_config(s)
+    return True, False, False
+
+def _cmd_init(s, p, c, _):
+    init.run(s, p, c)
+    return True, False, False
+
+def _cmd_clear(_, p, _1, _2):
+    new_payload = session.create_session(p["workdir"])
+    p.clear()
+    p.update(new_payload)
+    print("new session:", p["session_id"])
+    return True, False, False
+
+def _cmd_exit(_, _1, _2, _3):
+    return True, True, False
+
+
+_COMMANDS = {
+    "/help":     _cmd_help,
+    "/cwd":      _cmd_cwd,
+    "/session":  _cmd_session,
+    "/sessions": _cmd_sessions,
+    "/provider": _cmd_provider,
+    "/load":     _cmd_load,
+    "/files":    _cmd_files,
+    "/read":     _cmd_read,
+    "/search":   _cmd_search,
+    "/config":   _cmd_config,
+    "/init":     _cmd_init,
+    "/clear":    _cmd_clear,
+    "/exit":     _cmd_exit,
+    "/quit":     _cmd_exit,
+}
+
+
+def _run_slash_command(user_input, settings, payload, client):
     """Handle a slash-prefixed command. Returns (handled, should_exit, rebuild_client)."""
     parts = user_input.strip().split()
     command = parts[0].lower()
+    handler = _COMMANDS.get(command)
 
-    if command == "/help":
-        _show_help()
-        return True, False, False
-
-    if command == "/cwd":
-        _show_current_workdir(payload)
-        return True, False, False
-
-    if command == "/provider":
-        if len(parts) == 1:
-            _show_provider_status()
-        else:
-            _switch_provider(parts[1])
-            new_settings = config.load_settings()
-            settings.clear()
-            settings.update(new_settings)
-        return True, False, True
-
-    if command == "/session":
-        print(payload["session_id"])
-        return True, False, False
-
-    if command == "/sessions":
-        items = session.list_sessions()
-        if not items:
-            print("no sessions")
-            return True, False, False
-        for item in items:
-            print("%s  %s  %s" % (item["session_id"], item["updated_at"], item["workdir"]))
-        return True, False, False
-
-    if command == "/load":
-        if len(parts) < 2:
-            print("usage: /load <session_id>")
-            return True, False, False
-        try:
-            new_payload = session.load_session(parts[1])
-        except RuntimeError as exc:
-            print("error:", exc)
-            return True, False, False
-        payload.clear()
-        payload.update(new_payload)
-        settings["workdir"] = payload["workdir"]
-        print("loaded session:", payload["session_id"])
-        _display_session_history(payload["messages"])
-        return True, False, False
-
-    if command == "/files":
-        path = " ".join(parts[1:]) if len(parts) >= 2 else "."
-        result = files.list_files(root=payload["workdir"], relative_path=path, recursive=True)
-        _print_json_like(result)
-        return True, False, False
-
-    if command == "/read":
-        if len(parts) < 2:
-            print("usage: /read <path>")
-            return True, False, False
-        path = " ".join(parts[1:])
-        result = files.read_file(root=payload["workdir"], relative_path=path, max_bytes=settings["max_file_bytes"])
-        _print_json_like(result)
-        return True, False, False
-
-    if command == "/search":
-        if len(parts) < 2:
-            print("usage: /search <keyword> [path]")
-            return True, False, False
-        keyword = parts[1]
-        path = " ".join(parts[2:]) if len(parts) >= 3 else "."
-        result = files.search_text(root=payload["workdir"], keyword=keyword, relative_path=path)
-        _print_json_like(result)
-        return True, False, False
-
-    if command == "/config":
-        _show_config(settings)
-        return True, False, False
-
-    if command == "/clear":
-        new_payload = session.create_session(payload["workdir"])
-        payload.clear()
-        payload.update(new_payload)
-        print("new session:", payload["session_id"])
-        return True, False, False
-
-    if command in ("/exit", "/quit"):
-        return True, True, False
-
-    if command == "/verbose":
-        current = settings.get("show_tool_calls", False)
-        settings["show_tool_calls"] = not current
-        print("tool calls:", "on" if settings["show_tool_calls"] else "off")
-        return True, False, False
+    if handler:
+        return handler(settings, payload, client, parts[1:])
 
     print("unknown command:", command)
     print("use /help")
@@ -276,14 +293,21 @@ def _build_client(settings):
 # Command implementations
 # ---------------------------------------------------------------------------
 
+def _handle_message(client, settings, payload, user_input, mode):
+    if mode == "stateful":
+        return orchestrator.run(client, settings, payload, user_input)
+    return agent.handle_user_message(client, settings, payload, user_input)
+
+
 def run_ask(args, settings):
     """Execute the 'ask' subcommand: single question → answer."""
     payload = _get_session_payload(args.session_id)
     settings["workdir"] = payload["workdir"]
     client = _build_client(settings)
-    answer = agent.handle_user_message(client, settings, payload, args.message)
+    mode = getattr(args, "mode", "legacy")
+    answer = _handle_message(client, settings, payload, args.message, mode)
+    print()
     print(answer)
-    print("session:", payload["session_id"])
     return 0
 
 
@@ -292,15 +316,21 @@ def run_chat(args, settings):
     payload = _get_session_payload(args.session_id)
     settings["workdir"] = payload["workdir"]
     client = _build_client(settings)
+    mode = getattr(args, "mode", "legacy")
 
-    print("session:", payload["session_id"])
+    model = settings.get("llm_model") or settings.get("llm_model_key", "?")
+    print("\033[1;36mcodeCLI\033[0m  \033[90m%s / %s\033[0m" % (settings["active_provider"], model))
+    if mode == "stateful":
+        print("\033[90mmode     stateful (phase-driven)\033[0m")
+    print("\033[90mworkdir  %s\033[0m" % settings["workdir"])
+    print("\033[90msession  %s\033[0m" % payload["session_id"])
     if payload["messages"]:
         _display_session_history(payload["messages"])
-    print("type /exit to quit")
+    print("\033[90mtype /help\033[0m")
 
     while True:
         try:
-            user_input = input("> ").strip()
+            user_input = input("\033[1mYou ›\033[0m ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             return 0
@@ -308,16 +338,19 @@ def run_chat(args, settings):
         if not user_input:
             continue
         if user_input.startswith("/"):
-            handled, should_exit, rebuild = _run_slash_command(user_input, settings, payload)
+            handled, should_exit, rebuild = _run_slash_command(user_input, settings, payload, client)
             if should_exit:
                 return 0
             if rebuild:
                 client = _build_client(settings)
+                model = settings.get("llm_model") or settings.get("llm_model_key", "?")
             if handled:
                 continue
 
-        answer = agent.handle_user_message(client, settings, payload, user_input)
+        answer = _handle_message(client, settings, payload, user_input, mode)
+        print()
         print(answer)
+        print("\033[90m──\033[0m")
 
 
 def run_sessions():
@@ -327,7 +360,8 @@ def run_sessions():
         print("no sessions")
         return 0
     for item in items:
-        print("%s  %s  %s" % (item["session_id"], item["updated_at"], item["workdir"]))
+        ts = datetime.datetime.fromtimestamp(item["updated_at"]).strftime("%m-%d %H:%M")
+        print("  %s  %s  %s" % (ts, item["session_id"], item["workdir"]))
     return 0
 
 
@@ -366,14 +400,9 @@ def run_config(args):
     _flag_to_config(updated, "active_provider", "llm_api_key", args.api_key)
     _flag_to_config(updated, "active_provider", "llm_base_url", args.base_url)
     _flag_to_config(updated, "active_provider", "llm_model", args.model)
-    _flag_to_config(updated, "active_provider", "llm_headers_json", args.headers_json)
-    _flag_to_config(updated, "active_provider", "llm_body_template_json", args.body_template_json)
-    _flag_to_config(updated, "active_provider", "llm_response_path", args.response_path)
 
     if args.debug:
         updated["llm_debug"] = args.debug == "on"
-    if args.git_bash_path:
-        updated["git_bash_path"] = args.git_bash_path
 
     config.save_local_config(updated)
     print("saved:", config.local_config_path())

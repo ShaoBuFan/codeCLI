@@ -36,12 +36,9 @@ def build_tool_prompt():
 4. write_file — write/create a file (requires confirmation)
    arguments: {"path": "relative/path.txt", "content": "full file content"}
 
-5. run_shell — run shell command (requires confirmation)
-   arguments: {"command": "ls -la"}
-
 Permission notes:
 - list_files, read_file, search_text: no confirmation needed, use freely
-- write_file, run_shell: user must confirm with y/N, prefer tools 1-3 when possible
+- write_file: user must confirm with y/N, prefer tools 1-3 when possible
 
 Use only one tool call per response.
 

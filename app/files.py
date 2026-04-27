@@ -1,4 +1,3 @@
-import locale
 from pathlib import Path
 
 import safety
@@ -43,7 +42,7 @@ def read_file(root, relative_path, max_bytes):
         truncated = True
     else:
         truncated = False
-    content = _decode_with_fallback(data)
+    content = _decode_text(data)
     return {"ok": True, "path": str(path.relative_to(root)), "content": content, "truncated": truncated}
 
 
@@ -81,23 +80,22 @@ def write_file(root, relative_path, content):
     return {"ok": True, "path": str(path.relative_to(root))}
 
 
-def _decode_with_fallback(data):
-    """Try UTF-8 first, then system encoding, then GBK."""
-    for enc in ("utf-8", locale.getpreferredencoding(), "gbk", "latin-1"):
+_ENCODING_CHAIN = ("utf-8", "gbk", "latin-1")
+
+
+def _decode_text(data):
+    """Decode bytes using the fallback chain.  latin-1 decodes anything."""
+    for enc in _ENCODING_CHAIN:
         try:
             return data.decode(enc)
         except (UnicodeDecodeError, LookupError):
             continue
-    return data.decode("utf-8", errors="replace")
+    return ""  # unreachable: latin-1 always succeeds
 
 
 def _read_text_with_fallback(path):
-    """Try UTF-8 first, then system encoding, then GBK."""
-    for enc in ("utf-8", locale.getpreferredencoding(), "gbk", "latin-1"):
-        try:
-            return path.read_text(encoding=enc)
-        except (UnicodeDecodeError, LookupError):
-            continue
-        except Exception:
-            break
-    return path.read_text(encoding="utf-8", errors="replace")
+    """Read a file using the fallback encoding chain."""
+    try:
+        return _decode_text(path.read_bytes())
+    except OSError:
+        return ""
