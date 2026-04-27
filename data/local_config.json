@@ -4,7 +4,7 @@
   "providers": {
     "deepseek": {
       "llm_provider": "openai_compatible",
-      "llm_api_key": "sk-87c3bd8cb8e740ce9c62f7993b2e7387",
+      "llm_api_key": "",
       "llm_base_url": "https://api.deepseek.com/chat/completions",
       "llm_model": "deepseek-v4-flash"
     },
