@@ -7,17 +7,16 @@ Python 标准库，零依赖。自定义 JSON 文本协议驱动 LLM，支持 De
 ```bash
 python app/main.py config --init-template        # 生成配置模板
 python app/main.py config --provider deepseek --api-key "sk-..."
-python app/main.py chat
+python app/main.py
 ```
 
-## 两种运行模式
+## 工作流
 
 ```bash
-python app/main.py chat                           # legacy：动态步数预算，模型自主探索
-python app/main.py chat --mode stateful           # 状态机：phase 驱动，按阶段最小工具集
+python app/main.py
 ```
 
-stateful 模式六阶段工作流：
+统一 phase 驱动工作流：
 
 ```
 IDLE → EXPLORING  (只读工具)   → report_findings → 记录发现
@@ -32,8 +31,7 @@ IDLE → EXPLORING  (只读工具)   → report_findings → 记录发现
 
 ```
 main.py → cli.py
-            ├── agent.py          旧循环 (legacy)
-            ├── orchestrator.py   新状态机 (stateful)
+            ├── orchestrator.py   统一状态机入口
             │     ├── state.py         AgentState 类型 + StateManager
             │     └── phase.py         阶段转移 + 工具白名单
             ├── llm_client.py     OpenAICompatibleClient / MattermostClient
@@ -47,7 +45,7 @@ main.py → cli.py
             └── init.py           项目初始化 (评分 → 探索 → PROJECT.md)
 ```
 
-16 模块，2156 行，单向依赖无循环。
+15 模块，单向依赖无循环。
 
 ## 协议
 
@@ -67,7 +65,7 @@ main.py → cli.py
 | `search_text` | 搜索文件内容（限 100 结果） |
 | `write_file` | 写文件（需确认） |
 
-stateful 模式额外工具：
+phase 工作流额外工具：
 
 | 工具 | 阶段 | 说明 |
 |---|---|---|
@@ -107,10 +105,9 @@ stateful 模式额外工具：
 ## CLI
 
 ```bash
-python app/main.py ask "问题"                # 单次提问
-python app/main.py chat                      # 交互 REPL
+python app/main.py                           # 交互 REPL
+python app/main.py chat                      # 兼容旧用法
 python app/main.py chat --session <id>       # 恢复会话
-python app/main.py chat --mode stateful      # 状态机模式
 python app/main.py sessions                  # 会话列表
 python app/main.py config --show             # 当前配置
 python app/main.py config --init-template    # 生成模板

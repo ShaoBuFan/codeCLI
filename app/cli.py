@@ -8,7 +8,6 @@ import datetime
 import json
 import os
 
-import agent
 import config
 import files
 import init
@@ -64,8 +63,9 @@ def _show_help():
 def _show_config(settings):
     key = "configured" if settings["llm_api_key"] else "not set"
     debug = "on" if settings["llm_debug"] else "off"
+    model = settings.get("llm_model") or settings.get("llm_model_key", "")
     print("provider:   %s (%s)" % (settings["active_provider"], settings["llm_provider"]))
-    print("model:      %s" % settings.get("llm_model") or settings.get("llm_model_key", ""))
+    print("model:      %s" % model)
     print("base_url:   %s" % settings["llm_base_url"])
     print("timeout:    %ss" % settings["llm_timeout"])
     print("debug:      %s" % debug)
@@ -293,22 +293,8 @@ def _build_client(settings):
 # Command implementations
 # ---------------------------------------------------------------------------
 
-def _handle_message(client, settings, payload, user_input, mode):
-    if mode == "stateful":
-        return orchestrator.run(client, settings, payload, user_input)
-    return agent.handle_user_message(client, settings, payload, user_input)
-
-
-def run_ask(args, settings):
-    """Execute the 'ask' subcommand: single question → answer."""
-    payload = _get_session_payload(args.session_id)
-    settings["workdir"] = payload["workdir"]
-    client = _build_client(settings)
-    mode = getattr(args, "mode", "legacy")
-    answer = _handle_message(client, settings, payload, args.message, mode)
-    print()
-    print(answer)
-    return 0
+def _handle_message(client, settings, payload, user_input):
+    return orchestrator.run(client, settings, payload, user_input)
 
 
 def run_chat(args, settings):
@@ -316,12 +302,9 @@ def run_chat(args, settings):
     payload = _get_session_payload(args.session_id)
     settings["workdir"] = payload["workdir"]
     client = _build_client(settings)
-    mode = getattr(args, "mode", "legacy")
 
     model = settings.get("llm_model") or settings.get("llm_model_key", "?")
     print("\033[1;36mcodeCLI\033[0m  \033[90m%s / %s\033[0m" % (settings["active_provider"], model))
-    if mode == "stateful":
-        print("\033[90mmode     stateful (phase-driven)\033[0m")
     print("\033[90mworkdir  %s\033[0m" % settings["workdir"])
     print("\033[90msession  %s\033[0m" % payload["session_id"])
     if payload["messages"]:
@@ -347,7 +330,7 @@ def run_chat(args, settings):
             if handled:
                 continue
 
-        answer = _handle_message(client, settings, payload, user_input, mode)
+        answer = _handle_message(client, settings, payload, user_input)
         print()
         print(answer)
         print("\033[90m──\033[0m")

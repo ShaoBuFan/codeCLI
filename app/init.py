@@ -6,8 +6,8 @@ Scoring internals are private — only `run_init` is public.
 
 import os
 
-import agent
 import files
+import orchestrator
 
 # ---------------------------------------------------------------------------
 # Scoring tables
@@ -154,6 +154,6 @@ def run(settings, payload, client):
     print("analyzing...")
     prompt = listing + "\n" + "\n".join(context_parts)
     prompt += "\n\nCreate PROJECT.md covering: project summary, architecture, key files, build/run/test commands, and conventions. Use write_file to save it."
-    answer = agent.handle_user_message(client, settings, payload, prompt)
+    answer = orchestrator.run(client, settings, payload, prompt)
     print()
     print(answer)
