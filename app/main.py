@@ -12,12 +12,8 @@ import config
 
 def build_parser():
     parser = argparse.ArgumentParser(description="Local CLI AI assistant")
+    parser.set_defaults(session_id=None)
     subparsers = parser.add_subparsers(dest="command")
-
-    chat_parser = subparsers.add_parser("chat", help="Start interactive chat")
-    chat_parser.add_argument("--session", dest="session_id", help="Reuse a session id")
-
-    subparsers.add_parser("sessions", help="List local sessions")
 
     config_parser = subparsers.add_parser("config", help="Store local config in project data directory")
     config_parser.add_argument("--provider", dest="provider", help="LLM provider: openai_compatible or mattermost")
@@ -36,12 +32,13 @@ def main():
         parser = build_parser()
         args = parser.parse_args()
 
-        if args.command in (None, "chat"):
+        if args.command is None:
             return cli.run_chat(args, settings)
-        if args.command == "sessions":
-            return cli.run_sessions()
         if args.command == "config":
             return cli.run_config(args)
+
+        parser.print_help()
+        return 1
     except RuntimeError as exc:
         print("error:", exc)
         return 1

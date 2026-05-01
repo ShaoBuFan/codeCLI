@@ -106,9 +106,6 @@ phase 工作流额外工具：
 
 ```bash
 python app/main.py                           # 交互 REPL
-python app/main.py chat                      # 兼容旧用法
-python app/main.py chat --session <id>       # 恢复会话
-python app/main.py sessions                  # 会话列表
 python app/main.py config --show             # 当前配置
 python app/main.py config --init-template    # 生成模板
 ```
