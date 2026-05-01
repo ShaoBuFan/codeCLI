@@ -25,18 +25,20 @@ IDLE → EXPLORING  (只读工具)   → report_findings → 记录发现
                  → VERIFYING  (读+验证)          → report_done → DONE
 ```
 
-每阶段只暴露语义相关的工具，final 在 EXPLORING/PLANNING/PATCHING 被拦截强制使用阶段工具。进度、发现、约束全部外部存储，不靠对话历史记忆。最终生成的文件真实写入磁盘。
+每阶段只暴露语义相关的工具，EXPLORING/PLANNING/PATCHING 阶段不允许直接给出自然语言完成回复，必须先使用阶段工具。进度、发现、约束全部外部存储，不靠对话历史记忆。最终生成的文件真实写入磁盘。
 
 ## 架构
 
 ```
 main.py → cli.py
-            ├── orchestrator.py   统一状态机入口
+            ├── repl_commands.py  交互命令路由
+            ├── orchestrator.py   状态机主循环
+            │     ├── messages.py      上下文组装 + PROJECT.md 注入
+            │     ├── tool_runtime.py  工具执行 + phase 推进
             │     ├── state.py         AgentState 类型 + StateManager
             │     └── phase.py         阶段转移 + 工具白名单
             ├── llm_client.py     OpenAICompatibleClient / MattermostClient
-            ├── protocol.py       JSON 协议解析
-            ├── messages.py       消息组装 + PROJECT.md 注入
+            ├── protocol.py       嵌入式 tool_call 协议解析
             ├── tools.py          工具派发 (含 report_* 结构化报告工具)
             │     ├── files.py        文件操作 + 编码回退
             │     └── safety.py       路径沙箱 + 用户确认
@@ -45,16 +47,19 @@ main.py → cli.py
             └── init.py           项目初始化 (评分 → 探索 → PROJECT.md)
 ```
 
-15 模块，单向依赖无循环。
+17 模块，按入口、会话、状态机、工具执行分层。
 
 ## 协议
 
-```json
-{"type": "final",     "content": "回答文本"}
-{"type": "tool_call", "tool": "read_file", "arguments": {"path": "app/main.py"}}
+普通回答直接输出自然语言。
+
+工具调用时输出：
+
+```xml
+<tool_call>{"type":"tool_call","tool":"read_file","arguments":{"path":"app/main.py"}}</tool_call>
 ```
 
-工具调用循环：用户消息 → LLM 返回 tool_call → 执行 → 结果注入 → 再问 LLM → ... → final → 输出。起始 10 步，最多 25 步。格式不符自动 retry（最多 2 次，指明具体错误）。
+工具调用循环：用户消息 → LLM 返回 `<tool_call>` → 执行 → 结果注入 → 再问 LLM → ... → 最终自然语言回答。工具调用格式不符自动 retry（最多 2 次，指明具体错误）。
 
 ## 工具
 

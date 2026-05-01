@@ -1,12 +1,6 @@
-"""Message history management and assembly for the agent loop.
-
-Responsible for building the message list sent to the LLM,
-including history trimming, role normalization, and project context injection.
-"""
+"""Prompt-context assembly for the orchestrator."""
 
 from pathlib import Path
-
-import prompts
 
 
 def load_project_context(workdir):
@@ -23,6 +17,17 @@ def load_project_context(workdir):
     return {"role": "system", "content": "## Project context (PROJECT.md)\n\n%s" % content}
 
 
+def ensure_project_context(payload):
+    """Inject PROJECT.md into the session history once."""
+    ctx = load_project_context(payload.get("workdir", ""))
+    if not ctx:
+        return
+    marker = "## Project context (PROJECT.md)"
+    if any(marker in m.get("content", "") for m in payload["messages"]):
+        return
+    payload["messages"].append(ctx)
+
+
 def trim_history(messages, max_history_messages):
     """Keep only the last N messages for context window limits."""
     if len(messages) <= max_history_messages:
@@ -31,7 +36,7 @@ def trim_history(messages, max_history_messages):
 
 
 def normalize_history(messages):
-    """Map non-standard roles to user role for LLMs without native tool support."""
+    """Map unknown roles to user role before sending to the model."""
     normalized = []
     for item in messages:
         role = item.get("role", "user")
@@ -43,17 +48,22 @@ def normalize_history(messages):
     return normalized
 
 
-def build_messages_for_turn(session_payload, settings):
-    """Assemble the full message sequence for one LLM turn."""
-    workdir = session_payload.get("workdir") or settings.get("workdir", "")
+def build_turn_messages(payload, settings, state_manager, state_obj, allowed, tool_prompt, instruction, phase_guidance):
+    """Assemble the full message list for one orchestrator turn."""
+    workdir = payload["workdir"]
     messages = [
-        {"role": "system", "content": prompts.SYSTEM_PROMPT},
-        {"role": "system", "content": prompts.build_tool_prompt()},
-        {"role": "system", "content": "Current working directory: %s" % workdir},
+        {"role": "system", "content": tool_prompt["base"]},
+        {"role": "system", "content": tool_prompt["tools"]},
     ]
+    if instruction:
+        messages.append({"role": "system", "content": instruction})
+    if phase_guidance:
+        messages.append({"role": "system", "content": phase_guidance})
+    messages.append({"role": "system", "content": state_manager.to_prompt_context(state_obj)})
+    messages.append({"role": "system", "content": "Current working directory: %s" % workdir})
     messages.extend(
         normalize_history(
-            trim_history(session_payload["messages"], settings["max_history_messages"])
+            trim_history(payload["messages"], settings["max_history_messages"])
         )
     )
     return messages

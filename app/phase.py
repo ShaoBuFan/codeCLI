@@ -63,12 +63,12 @@ PHASE_INSTRUCTIONS: dict[Phase, str] = {
         "You are in the EXPLORING phase. Read relevant files to understand "
         "the codebase. When you have enough information, you MUST call "
         "report_findings — it is the ONLY way to advance to the next phase. "
-        "Do not give a final answer yet; call report_findings first.",
+        "Do not give a natural-language completion reply yet; call report_findings first.",
     Phase.PLANNING:
         "You are in the PLANNING phase. Based on the findings, create a "
         "file-level execution plan. You MUST call report_plan with your "
         "step list — this is the ONLY way to advance. Do not write files "
-        "or give final answers yet.",
+        "or give a natural-language completion reply yet.",
     Phase.PATCHING:
         "You are in the PATCHING phase. Execute the current step shown "
         "in the task state. Read the target file first, then write the "

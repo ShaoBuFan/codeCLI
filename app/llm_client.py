@@ -113,13 +113,7 @@ class MattermostClient(BaseLLMClient):
         )
 
     def chat(self, messages):
-        # Map system→user before sending: company API tends to stop
-        # responding when system-role messages appear mid-conversation.
-        outgoing = [
-            {"role": "user", "content": m["content"]} if m["role"] == "system" else m
-            for m in messages
-        ]
-        payload_text = json.dumps(outgoing, ensure_ascii=False)
+        payload_text = json.dumps(messages, ensure_ascii=False)
 
         _write_debug_log(self.settings, "mattermost_request", {
             "url": self._url(), "headers": _mask_headers(self._headers), "body": _truncate_text(payload_text),

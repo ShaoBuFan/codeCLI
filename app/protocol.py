@@ -1,12 +1,11 @@
-"""JSON protocol parsing and content extraction.
-
-Parses model output into structured responses and formats
-tool results back into the message stream.
-"""
+"""Embedded tool-call parsing and content extraction."""
 
 import json
+import re
 import time
 from pathlib import Path
+
+_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL | re.IGNORECASE)
 
 
 def strip_code_fence(text):
@@ -33,46 +32,51 @@ def decode_escaped_text(text):
 
 
 def parse_model_output(raw_text):
-    """Parse model output into a structured response dict.
-
-    Returns (parsed_dict, None) on success or (None, error_code) on failure.
-    error_code is a short string like "json_decode_error", "missing_content", etc.
-    """
+    """Parse model output into natural language plus zero or more embedded tool calls."""
     text = strip_code_fence(raw_text)
     if not text:
         return None, "empty_output"
 
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return None, "json_decode_error"
+    matches = list(_TOOL_CALL_RE.finditer(text))
+    if not matches:
+        if "<tool_call>" in text.lower() or "</tool_call>" in text.lower():
+            return None, "unclosed_tool_call"
+        return {"type": "text", "content": text}, None
 
-    if not isinstance(parsed, dict):
-        return None, "invalid_structure"
+    tool_calls = []
+    for match in matches:
+        try:
+            parsed = json.loads(match.group(1).strip())
+        except json.JSONDecodeError:
+            return None, "json_decode_error"
 
-    if parsed.get("type") == "final":
-        content = parsed.get("content")
-        if isinstance(content, str):
-            return {"type": "final", "content": content}, None
-        return None, "missing_content"
+        if not isinstance(parsed, dict):
+            return None, "invalid_structure"
 
-    if parsed.get("type") == "tool_call":
+        if parsed.get("type") != "tool_call":
+            return None, "unknown_type"
+
         tool = parsed.get("tool", "")
         arguments = parsed.get("arguments", {})
         if not isinstance(tool, str) or not tool:
             return None, "empty_tool_name"
         if not isinstance(arguments, dict):
             return None, "invalid_arguments"
-        return {"type": "tool_call", "tool": tool, "arguments": arguments}, None
+        tool_calls.append({"tool": tool, "arguments": arguments})
 
-    return None, "unknown_type"
+    content = _strip_tool_call_blocks(text).strip()
+    return {"type": "tool_calls", "content": content, "tool_calls": tool_calls}, None
 
 
-def extract_final_content(parsed):
-    """Extract clean answer text from a parsed final response."""
-    if not isinstance(parsed, dict) or parsed.get("type") != "final":
+def extract_text_content(parsed):
+    """Extract clean answer text from a parsed natural-language response."""
+    if not isinstance(parsed, dict) or parsed.get("type") != "text":
         return ""
     return decode_escaped_text(parsed.get("content", ""))
+
+
+def _strip_tool_call_blocks(text):
+    return _TOOL_CALL_RE.sub("", text)
 
 
 def log_malformed_output(logs_dir, stage, raw_output, parse_result):
@@ -93,8 +97,32 @@ def log_malformed_output(logs_dir, stage, raw_output, parse_result):
 
 def format_tool_result_message(tool_name, arguments, result):
     """Format a tool result into the interleaved message for the model."""
-    return "--- tool call result ---\ntool: %s\narguments: %s\nresult: %s" % (
-        tool_name,
-        json.dumps(arguments, ensure_ascii=False, sort_keys=True),
-        json.dumps(result, ensure_ascii=False),
-    )
+    next_hint = _next_hint(tool_name, result)
+    payload = {
+        "tool": tool_name,
+        "arguments": arguments,
+        "ok": bool(result.get("ok")),
+        "error": result.get("error", ""),
+        "report": result.get("_report", ""),
+        "result": result,
+        "next_hint": next_hint,
+    }
+    return "--- tool call result ---\n%s" % json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _next_hint(tool_name, result):
+    if result.get("_report") == "findings":
+        return "move_toward_planning"
+    if result.get("_report") == "plan":
+        return "move_toward_patching"
+    if result.get("_report") == "done":
+        return "task_complete"
+    if not result.get("ok"):
+        return "inspect_error_or_report_blocked"
+    if tool_name == "list_files":
+        return "read_relevant_files_or_report_findings"
+    if tool_name == "read_file":
+        return "decide_between_next_read_or_phase_report"
+    if tool_name == "write_file":
+        return "review_changes_and_continue"
+    return "choose_next_action"
