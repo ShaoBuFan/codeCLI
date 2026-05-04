@@ -133,7 +133,7 @@ def run(settings, payload, client):
         r = files.read_file(root=root, relative_path=rel, max_bytes=limit)
         if not r.get("ok"):
             continue
-        content = r["content"]
+        content = files.get_data(r, "content", "")
         if "\x00" in content:
             continue
         context_parts.append("--- %s (%dB) ---\n%s\n" % (rel, size, content))
