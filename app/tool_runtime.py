@@ -68,7 +68,9 @@ def apply_report_result(result, state_obj, payload):
         return
 
     if report_type == "done":
-        state_obj.phase = st.Phase.DONE
+        target = ph.transition_on_report(report_type)
+        if target is not None:
+            state_obj.phase = target
         session_module.append_message(payload, "system",
             "Task marked done: %s" % result.get("summary", ""))
 
@@ -108,7 +110,7 @@ def execute_tool_call(tool_name, arguments, provider, state_obj, payload, settin
     result = tools.run_tool(tool_name, arguments, settings)
 
     if (state_obj.phase == st.Phase.PATCHING
-            and tool_name == "write_file"
+            and tool_name in ("write_file", "apply_diff")
             and result.get("ok")):
         _mark_step_written(state_obj, arguments)
         advance_phase(state_obj, payload)

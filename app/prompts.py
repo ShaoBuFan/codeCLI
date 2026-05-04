@@ -1,3 +1,8 @@
+import json
+
+import tools
+
+
 SYSTEM_PROMPT = """You are a local coding assistant running inside a CLI.
 
 You help users by reading their project files and answering questions.
@@ -54,35 +59,26 @@ def build_tool_prompt(provider, allowed, recommended_action=""):
 
 
 def _build_standard_tool_prompt():
-    return """Available tools:
-
-1. list_files — list directory contents (limit 200 items)
-   arguments: {"path": ".", "recursive": true}
-   add "pattern":"*.java" to filter by extension
-
-2. read_file — read file contents
-   arguments: {"path": "relative/path.txt"}
-
-3. search_text — search files for keyword
-   arguments: {"keyword": "text", "path": "."}
-
-4. write_file — write/create a file (requires confirmation)
-   arguments: {"path": "relative/path.txt", "content": "full file content"}
-
-Permission notes:
-- list_files, read_file, search_text: no confirmation needed, use freely
-- write_file: user must confirm with y/N, prefer tools 1-3 when possible
-
-You may include multiple tool calls in one response if they are clearly needed in sequence.
-Each tool call must use this exact format:
-<tool_call>{"type":"tool_call","tool":"...","arguments":{...}}</tool_call>
-
-When you receive a tool result, it will appear as a user message in this format:
---- tool call result ---
-<json payload>
-
-Read it as execution output from the local environment.
-"""
+    lines = ["Available tools:", ""]
+    for idx, (name, schema) in enumerate(tools.TOOL_SCHEMAS.items(), start=1):
+        lines.append("%d. %s — %s" % (idx, name, schema["description"]))
+        sig = _tool_signature(name)
+        lines.append("   %s" % sig)
+        lines.append("")
+    lines.append("Permission notes:")
+    lines.append("- list_files, read_file, search_text: no confirmation needed, use freely")
+    lines.append("- write_file, apply_diff: user must confirm with y/N, prefer read-only tools when possible")
+    lines.append("")
+    lines.append("You may include multiple tool calls in one response if they are clearly needed in sequence.")
+    lines.append("Each tool call must use this exact format:")
+    lines.append('<tool_call>{"type":"tool_call","tool":"...","arguments":{...}}</tool_call>')
+    lines.append("")
+    lines.append("When you receive a tool result, it will appear as a user message in this format:")
+    lines.append("--- tool call result ---")
+    lines.append("<json payload>")
+    lines.append("")
+    lines.append("Read it as execution output from the local environment.")
+    return "\n".join(lines)
 
 
 def _build_mattermost_tool_prompt(allowed, recommended_action):
@@ -104,17 +100,15 @@ def _build_mattermost_tool_prompt(allowed, recommended_action):
 
 
 def _tool_signature(name):
-    signatures = {
-        "list_files": 'arguments: {"path":".","recursive":true,"pattern":"*.py"}',
-        "read_file": 'arguments: {"path":"relative/path.txt"}',
-        "search_text": 'arguments: {"keyword":"text","path":"."}',
-        "write_file": 'arguments: {"path":"relative/path.txt","content":"full file content"}',
-        "report_findings": 'arguments: {"key_findings":["..."],"relevant_files":["..."],"constraints":["..."]}',
-        "report_plan": 'arguments: {"steps":[{"intent":"...","target_files":["..."]}]}',
-        "report_blocked": 'arguments: {"reason_type":"file_not_found|dependency_conflict|test_failure|ambiguous_requirement|permission_denied|other","detail":"...","suggested_action":"retry|skip|replan|abort"}',
-        "report_done": 'arguments: {"summary":"what was accomplished"}',
-    }
-    return signatures.get(name, "")
+    schema = tools.TOOL_SCHEMAS.get(name)
+    if not schema:
+        return ""
+    params = schema["parameters"]
+    param_str = ", ".join(
+        "%s:%s" % (k, json.dumps(v, ensure_ascii=False))
+        for k, v in params.items()
+    )
+    return "arguments: {%s}" % param_str
 
 
 def build_phase_guidance(provider, phase, allowed, current_step, files_modified):
@@ -143,7 +137,7 @@ def build_phase_guidance(provider, phase, allowed, current_step, files_modified)
     elif phase_name == "PATCHING":
         lines.extend([
             "If a target file has not been inspected in this phase, read_file first.",
-            "If the change is ready, call write_file with the full new file content.",
+            "If the change is ready, call write_file or apply_diff.",
             "If you cannot safely continue, call report_blocked.",
             "Do not give a natural-language completion reply in this phase.",
         ])

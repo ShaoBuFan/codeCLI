@@ -5,6 +5,8 @@ import re
 import time
 from pathlib import Path
 
+import phase as ph
+
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL | re.IGNORECASE)
 
 
@@ -97,7 +99,7 @@ def log_malformed_output(logs_dir, stage, raw_output, parse_result):
 
 def format_tool_result_message(tool_name, arguments, result):
     """Format a tool result into the interleaved message for the model."""
-    next_hint = _next_hint(tool_name, result)
+    next_hint = ph.get_next_hint(tool_name, result)
     payload = {
         "tool": tool_name,
         "arguments": arguments,
@@ -108,21 +110,3 @@ def format_tool_result_message(tool_name, arguments, result):
         "next_hint": next_hint,
     }
     return "--- tool call result ---\n%s" % json.dumps(payload, ensure_ascii=False, sort_keys=True)
-
-
-def _next_hint(tool_name, result):
-    if result.get("_report") == "findings":
-        return "move_toward_planning"
-    if result.get("_report") == "plan":
-        return "move_toward_patching"
-    if result.get("_report") == "done":
-        return "task_complete"
-    if not result.get("ok"):
-        return "inspect_error_or_report_blocked"
-    if tool_name == "list_files":
-        return "read_relevant_files_or_report_findings"
-    if tool_name == "read_file":
-        return "decide_between_next_read_or_phase_report"
-    if tool_name == "write_file":
-        return "review_changes_and_continue"
-    return "choose_next_action"

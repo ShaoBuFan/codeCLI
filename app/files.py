@@ -80,6 +80,17 @@ def write_file(root, relative_path, content):
     return {"ok": True, "path": str(path.relative_to(root))}
 
 
+def get_data(result, key, default=None):
+    """Access a value from a file-operation result dict.
+
+    Provides a single access pattern so callers don't need to know which
+    key each operation uses (``items`` / ``content`` / ``results``).
+    """
+    if not result.get("ok"):
+        return default
+    return result.get(key, default)
+
+
 _ENCODING_CHAIN = ("utf-8", "gbk", "latin-1")
 
 

@@ -1,3 +1,4 @@
+import diff
 import files
 import safety
 
@@ -9,6 +10,63 @@ def _bool(value, default=True):
         return value.lower() in ("true", "1", "yes", "on")
     return bool(value) if value is not None else default
 
+
+# ---------------------------------------------------------------------------
+# Canonical tool schemas — single source of truth consumed by prompts.py
+# ---------------------------------------------------------------------------
+
+TOOL_SCHEMAS = {
+    "list_files": {
+        "description": "List directory contents (limit 200 items)",
+        "parameters": {"path": ".", "recursive": True, "pattern": "*.py"},
+        "notes": "If pattern is omitted, all files are listed.",
+    },
+    "read_file": {
+        "description": "Read file contents",
+        "parameters": {"path": "relative/path.txt"},
+        "notes": "Max bytes limited by configuration.",
+    },
+    "search_text": {
+        "description": "Search files for keyword",
+        "parameters": {"keyword": "text", "path": "."},
+        "notes": "Returns up to 100 results.",
+    },
+    "write_file": {
+        "description": "Write/create a file (requires confirmation)",
+        "parameters": {"path": "relative/path.txt", "content": "full file content"},
+        "notes": "User must confirm with y/N.",
+    },
+    "apply_diff": {
+        "description": "Apply a unified diff to a file (requires confirmation)",
+        "parameters": {"path": "relative/path.txt", "diff": "unified diff text"},
+        "notes": "User must confirm with y/N. Safer than write_file for targeted edits.",
+    },
+    "report_findings": {
+        "description": "Report exploration findings to advance to PLANNING phase",
+        "parameters": {"key_findings": ["..."], "relevant_files": ["..."], "constraints": ["..."]},
+        "notes": "Required to advance from EXPLORING to PLANNING.",
+    },
+    "report_plan": {
+        "description": "Submit execution plan to advance to PATCHING phase",
+        "parameters": {"steps": [{"intent": "...", "target_files": ["..."]}]},
+        "notes": "Required to advance from PLANNING to PATCHING.",
+    },
+    "report_blocked": {
+        "description": "Report a blocked step with structured reason",
+        "parameters": {"reason_type": "file_not_found|dependency_conflict|...", "detail": "...", "suggested_action": "retry|skip|replan|abort"},
+        "notes": "Use when a step cannot be completed.",
+    },
+    "report_done": {
+        "description": "Mark the task as complete",
+        "parameters": {"summary": "what was accomplished"},
+        "notes": "Transitions to DONE phase.",
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Report-tool handlers
+# ---------------------------------------------------------------------------
 
 def _report_findings(args):
     key_findings = args.get("key_findings")
@@ -45,9 +103,9 @@ def _report_done(args):
     return {"ok": True, "_report": "done", "summary": summary}
 
 
-# Phase-agnostic tools (file I/O) and report tools
+# Phase-agnostic tools (file I/O + report)
 _ALL_TOOLS = {
-    "list_files", "read_file", "search_text", "write_file",
+    "list_files", "read_file", "search_text", "write_file", "apply_diff",
     "report_findings", "report_plan", "report_blocked", "report_done",
 }
 
@@ -98,5 +156,28 @@ def run_tool(tool_name, arguments, settings):
             relative_path=path,
             content=arguments.get("content", ""),
         )
+    if tool_name == "apply_diff":
+        path = arguments.get("path", "")
+        diff_text = arguments.get("diff", "")
+        if not diff_text:
+            return {"ok": False, "error": "apply_diff requires diff text"}
+        if not safety.confirm_action("Apply diff to %s ? [y/N]: " % path):
+            return {"ok": False, "error": "User rejected diff application"}
+        try:
+            read_result = files.read_file(
+                root=root,
+                relative_path=path,
+                max_bytes=settings["max_file_bytes"],
+            )
+            if not read_result.get("ok"):
+                return {"ok": False, "error": "Cannot read target file: %s" % read_result.get("error", "unknown")}
+            original = files.get_data(read_result, "content", "")
+            new_content = diff.apply_diff(original, diff_text)
+            return files.write_file(root=root, relative_path=path, content=new_content)
+        except diff.DiffError as exc:
+            return {"ok": False, "error": str(exc),
+                    "detail": {"hunk_index": exc.hunk_index,
+                               "expected": exc.expected_context[:500],
+                               "actual": exc.actual_context[:500]}}
 
     return {"ok": False, "error": "Unknown tool: %s" % tool_name}
